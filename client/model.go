@@ -110,7 +110,7 @@ func newClientModel(config *Configuration, ctl mvc.Controller) *ClientModel {
 	} else {
 		m.Info("Trusting root CAs: %v", rootCrtPaths)
 		var err error
-		if m.tlsConfig, err = LoadTLSConfig(rootCrtPaths); err != nil {
+		if m.tlsConfig, err = LoadTLSConfig(rootCrtPaths, "", ""); err != nil {
 			panic(err)
 		}
 	}
@@ -201,12 +201,16 @@ func (c *ClientModel) Run() {
 		}
 
 		log.Info("Waiting %d seconds before reconnecting", int(wait.Seconds()))
+		fmt.Printf("lose connection to the server. reconnect try will start after %ds\n", int(wait.Seconds()))
+
 		time.Sleep(wait)
 		// exponentially increase wait time
 		wait = 2 * wait
 		wait = time.Duration(math.Min(float64(wait), float64(maxWait)))
 		c.connStatus = mvc.ConnReconnecting
 		c.update()
+
+		fmt.Println("reconnecting...")
 	}
 }
 
@@ -214,7 +218,7 @@ func (c *ClientModel) Run() {
 func (c *ClientModel) control() {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Error("control recovering from failure %v", r)
+			_ = log.Error("control recovering from failure %v", r)
 		}
 	}()
 
@@ -233,6 +237,11 @@ func (c *ClientModel) control() {
 		panic(err)
 	}
 	defer ctlConn.Close()
+
+	if c.connStatus == mvc.ConnReconnecting {
+		// reconnected
+		fmt.Println("reconnecting successfully.")
+	}
 
 	// authenticate with the server
 	auth := &msg.Auth{
@@ -254,18 +263,29 @@ func (c *ClientModel) control() {
 		panic(err)
 	}
 
-	if authResp.Error != "" {
-		emsg := fmt.Sprintf("Failed to authenticate to server: %s", authResp.Error)
-		c.ctl.Shutdown(emsg)
+	if authResp.Errno != 0 {
+		if authResp.Errno == 403 {
+			// wrong auth token
+			var token string
+			for token == "" {
+				fmt.Print("wrong auth token, please reenter: ")
+				_, _ = fmt.Scanln(&token)
+			}
+			c.authToken = token
+		}
+		//_ = c.Error("Failed to authenticate to server: %s", authResp.Error)
+		//c.ctl.Shutdown(errMsg)
 		return
 	}
+
+	fmt.Println("auth to the server successfully.")
 
 	c.id = authResp.ClientId
 	c.serverVersion = authResp.MmVersion
 	c.Info("Authenticated with server, client id: %v", c.id)
 	c.update()
 	if err = SaveAuthToken(c.configPath, c.authToken); err != nil {
-		c.Error("Failed to save auth token: %v", err)
+		_ = c.Error("Failed to save auth token: %v", err)
 	}
 
 	// request tunnels
@@ -273,14 +293,14 @@ func (c *ClientModel) control() {
 	for _, config := range c.tunnelConfig {
 		// create the protocol list to ask for
 		var protocols []string
-		for proto, _ := range config.Protocols {
-			protocols = append(protocols, proto)
+		for protocol := range config.Protocols {
+			protocols = append(protocols, protocol)
 		}
 
 		reqTunnel := &msg.ReqTunnel{
 			ReqId:      util.RandId(8),
 			Protocol:   strings.Join(protocols, "+"),
-			Hostname:   config.Hostname,
+			// Hostname:   config.Hostname,
 			Subdomain:  config.Subdomain,
 			HttpAuth:   config.HttpAuth,
 			RemotePort: config.RemotePort,
@@ -315,10 +335,14 @@ func (c *ClientModel) control() {
 			atomic.StoreInt64(&lastPong, time.Now().UnixNano())
 
 		case *msg.NewTunnel:
-			if m.Error != "" {
-				emsg := fmt.Sprintf("Server failed to allocate tunnel: %s", m.Error)
-				c.Error(emsg)
-				c.ctl.Shutdown(emsg)
+			if m.Errno != 0 || m.Error != "" {
+				if m.Errno == 403 {
+					fmt.Printf("error create a new tunnel: %+v\n", m.Error)
+				} else {
+					errMsg := fmt.Sprintf("Server failed to allocate tunnel: %s", m.Error)
+					_ = c.Error(errMsg)
+					c.ctl.Shutdown(errMsg)
+				}
 				continue
 			}
 
@@ -333,8 +357,10 @@ func (c *ClientModel) control() {
 			c.Info("Tunnel established at %v", tunnel.PublicUrl)
 			c.update()
 
+			fmt.Printf("new tunnel: %s %s -> %s\n", tunnel.Protocol.GetName(), tunnel.PublicUrl, tunnel.LocalAddr)
+
 		default:
-			ctlConn.Warn("Ignoring unknown control message %v ", m)
+			_ = ctlConn.Warn("Ignoring unknown control message %v ", m)
 		}
 	}
 }

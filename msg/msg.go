@@ -34,8 +34,7 @@ type Envelope struct {
 type Auth struct {
 	Version   string // protocol version
 	MmVersion string // major/minor software version (informational only)
-	User      string
-	Password  string
+	User      string // identify user by auth token
 	OS        string
 	Arch      string
 	ClientId  string // empty for new sessions
@@ -56,6 +55,7 @@ type AuthResp struct {
 	MmVersion string
 	ClientId  string
 	Error     string
+	Errno     int64  // 403: wrong auth token; 501: incompatible version; 500: other error
 }
 
 // A client sends this message to the server over the control channel
@@ -67,7 +67,7 @@ type ReqTunnel struct {
 	Protocol string
 
 	// http only
-	Hostname  string
+	Hostname  string // disabled!
 	Subdomain string
 	HttpAuth  string
 
@@ -87,6 +87,7 @@ type NewTunnel struct {
 	Url      string
 	Protocol string
 	Error    string
+	Errno    int64  // 403: permission denied; 404: user not login; 500: other error
 }
 
 // When the server wants to initiate a new tunneled connection, it sends

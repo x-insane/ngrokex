@@ -5,7 +5,6 @@ import (
 	"sync"
 
 	"github.com/x-insane/ngrokex/client/mvc"
-	"github.com/x-insane/ngrokex/client/views/term"
 	"github.com/x-insane/ngrokex/client/views/web"
 	"github.com/x-insane/ngrokex/log"
 	"github.com/x-insane/ngrokex/proto"
@@ -89,7 +88,7 @@ func (ctl *Controller) Go(fn func()) {
 		defer func() {
 			if r := recover(); r != nil {
 				err := util.MakePanicTrace(r)
-				ctl.Error(err)
+				_ = ctl.Error(err)
 				ctl.Shutdown(err)
 			}
 		}()
@@ -163,20 +162,9 @@ func (ctl *Controller) Run(config *Configuration) {
 		ctl.AddView(webView)
 	}
 
-	// init term ui
-	var termView *term.TermView
-	if config.LogTo != "stdout" {
-		termView = term.NewTermView(ctl)
-		ctl.AddView(termView)
-	}
-
 	for _, protocol := range model.GetProtocols() {
 		switch p := protocol.(type) {
 		case *proto.Http:
-			if termView != nil {
-				ctl.AddView(termView.NewHttpView(p))
-			}
-
 			if webView != nil {
 				ctl.AddView(webView.NewHttpView(p))
 			}

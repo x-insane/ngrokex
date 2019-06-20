@@ -2,6 +2,7 @@ package server
 
 import (
 	"crypto/tls"
+	"github.com/x-insane/ngrokex/server/db"
 	"math/rand"
 	"os"
 	"runtime/debug"
@@ -10,6 +11,8 @@ import (
 	"github.com/x-insane/ngrokex/conn"
 	"github.com/x-insane/ngrokex/log"
 	"github.com/x-insane/ngrokex/msg"
+	"github.com/x-insane/ngrokex/server/admin_http_handler"
+	"github.com/x-insane/ngrokex/server/config"
 	"github.com/x-insane/ngrokex/util"
 )
 
@@ -24,7 +27,7 @@ var (
 	controlRegistry *ControlRegistry
 
 	// XXX: kill these global variables - they're only used in tunnel.go for constructing forwarding URLs
-	opts      *Options
+	conf      *config.Configuration
 	listeners map[string]*conn.Listener
 )
 
@@ -32,8 +35,8 @@ func NewProxy(pxyConn conn.Conn, regPxy *msg.RegProxy) {
 	// fail gracefully if the proxy connection fails to register
 	defer func() {
 		if r := recover(); r != nil {
-			pxyConn.Warn("Failed with error: %v", r)
-			pxyConn.Close()
+			_ = pxyConn.Warn("Failed with error: %v", r)
+			_ = pxyConn.Close()
 		}
 	}()
 
@@ -73,17 +76,17 @@ func tunnelListener(addr string, tlsConfig *tls.Config) {
 				}
 			}()
 
-			tunnelConn.SetReadDeadline(time.Now().Add(connReadTimeout))
+			_ = tunnelConn.SetReadDeadline(time.Now().Add(connReadTimeout))
 			var rawMsg msg.Message
 			if rawMsg, err = msg.ReadMsg(tunnelConn); err != nil {
-				tunnelConn.Warn("Failed to read message: %v", err)
-				tunnelConn.Close()
+				_ = tunnelConn.Warn("Failed to read message: %v", err)
+				_ = tunnelConn.Close()
 				return
 			}
 
-			// don't timeout after the initial read, tunnel heartbeating will kill
-			// dead connections
-			tunnelConn.SetReadDeadline(time.Time{})
+			// don't timeout after the initial read
+			// tunnel heartbeat will kill dead connections
+			_ = tunnelConn.SetReadDeadline(time.Time{})
 
 			switch m := rawMsg.(type) {
 			case *msg.Auth:
@@ -93,18 +96,21 @@ func tunnelListener(addr string, tlsConfig *tls.Config) {
 				NewProxy(tunnelConn, m)
 
 			default:
-				tunnelConn.Close()
+				_ = tunnelConn.Close()
 			}
 		}(c)
 	}
 }
 
 func Main() {
-	// parse options
-	opts = parseArgs()
+	// parse conf
+	conf = config.ParseConfig()
+
+	// init database
+	db.InitTables()
 
 	// init logging
-	log.LogTo(opts.logto, opts.loglevel)
+	log.LogTo(conf.LogTo, conf.LogLevel)
 
 	// seed random number generator
 	seed, err := util.RandomSeed()
@@ -121,22 +127,31 @@ func Main() {
 	// start listeners
 	listeners = make(map[string]*conn.Listener)
 
-	// load tls configuration
-	tlsConfig, err := LoadTLSConfig(opts.tlsCrt, opts.tlsKey)
+	// load server tls configuration
+	serverTlsConfig, err := LoadServerTLSConfig(conf.Tunnel.CACert.CrtPath,
+		conf.Tunnel.TlsCert.CrtPath, conf.Tunnel.TlsCert.KeyPath)
 	if err != nil {
 		panic(err)
 	}
 
 	// listen for http
-	if opts.httpAddr != "" {
-		listeners["http"] = startHttpListener(opts.httpAddr, nil)
+	if conf.Http.HttpAddr != "" {
+		listeners["http"] = startHttpListener(conf.Http.HttpAddr, nil)
 	}
 
 	// listen for https
-	if opts.httpsAddr != "" {
-		listeners["https"] = startHttpListener(opts.httpsAddr, tlsConfig)
+	if conf.Http.HttpsAddr != "" {
+		// load public tls configuration
+		publicTlsConfig, err := LoadPublicTLSConfig(conf.Http.TlsCert.CrtPath, conf.Http.TlsCert.KeyPath)
+		if err != nil {
+			panic(err)
+		}
+		listeners["https"] = startHttpListener(conf.Http.HttpsAddr, publicTlsConfig)
 	}
 
+	// admin http listener
+	go admin_http_handler.AdminHttpListener(conf.Admin)
+
 	// ngrok clients
-	tunnelListener(opts.tunnelAddr, tlsConfig)
+	tunnelListener(conf.Tunnel.TunnelAddr, serverTlsConfig)
 }

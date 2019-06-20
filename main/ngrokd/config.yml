@@ -1,0 +1,21 @@
+tunnel:
+  tunnel_addr: :14443
+  ca:
+    crt:
+  tls:
+    crt:
+    key:
+
+admin:
+  http_port: 18080
+
+http:
+  domain: local.gotohope.cn
+  http_addr: :10080
+  https_addr: :10443
+  https_tls:
+    crt:
+    key:
+
+log_to: stdout # Write log messages to this file. 'stdout' and 'none' have special meanings
+log_level: DEBUG # The level of messages to log. One of: DEBUG, INFO, WARNING, ERROR

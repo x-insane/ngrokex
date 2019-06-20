@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/x-insane/ngrokex/conn"
 )
@@ -18,9 +19,19 @@ func readMsgShared(c conn.Conn) (buffer []byte, err error) {
 	}
 	c.Debug("Reading message with length: %d", sz)
 
+	if sz > 10 * 1024 { // the message is to large
+		err = fmt.Errorf("message length should be less than 10k")
+		return
+	}
+
 	buffer = make([]byte, sz)
 	n, err := c.Read(buffer)
 	c.Debug("Read message %s", buffer)
+
+	// ignore EOF error
+	if err == io.EOF {
+		err = nil
+	}
 
 	if err != nil {
 		return

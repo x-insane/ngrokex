@@ -7,13 +7,13 @@ deps: assets
 	go get -tags '$(BUILDTAGS)' -d -v ./...
 
 server: deps
-	go install -tags '$(BUILDTAGS)' main/ngrokd
+	go install -tags '$(BUILDTAGS)' github.com/x-insane/ngrokex/main/ngrokd
 
 fmt:
 	go fmt ./...
 
 client: deps
-	go install -tags '$(BUILDTAGS)' main/ngrok
+	go install -tags '$(BUILDTAGS)' github.com/x-insane/ngrokex/main/ngrok
 
 assets: client-assets server-assets
 

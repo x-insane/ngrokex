@@ -42,6 +42,15 @@ func Main() {
 		os.Exit(1)
 	}
 
+	if config.AuthToken == "" {
+		var token string
+		for token == "" {
+			fmt.Print("please enter your auth token: ")
+			_, _ = fmt.Scanln(&token)
+		}
+		config.AuthToken = token
+	}
+
 	// seed random number generator
 	seed, err := util.RandomSeed()
 	if err != nil {

@@ -6,14 +6,20 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"io/ioutil"
 
 	"github.com/x-insane/ngrokex/client/assets"
 )
 
-func LoadTLSConfig(rootCertPaths []string) (*tls.Config, error) {
-	pool := x509.NewCertPool()
+const (
+	ClientCrtAssetFile = "assets/client/tls/client.crt"
+	ClientKeyAssetFile = "assets/client/tls/client.key"
+)
 
-	for _, certPath := range rootCertPaths {
+func LoadTLSConfig(caPaths []string, crtPath string, keyPath string) (*tls.Config, error) {
+	// load ca cert
+	pool := x509.NewCertPool()
+	for _, certPath := range caPaths {
 		rootCrt, err := assets.Asset(certPath)
 		if err != nil {
 			return nil, err
@@ -32,5 +38,34 @@ func LoadTLSConfig(rootCertPaths []string) (*tls.Config, error) {
 		pool.AddCert(certs[0])
 	}
 
-	return &tls.Config{RootCAs: pool}, nil
+	// load client cert
+	var (
+		crt  []byte
+		key  []byte
+		err  error
+		cert tls.Certificate
+	)
+	if crt, err = fileOrAsset(crtPath, ClientCrtAssetFile); err != nil {
+		return nil, err
+	}
+	if key, err = fileOrAsset(keyPath, ClientKeyAssetFile); err != nil {
+		return nil, err
+	}
+	if cert, err = tls.X509KeyPair(crt, key); err != nil {
+		return nil, err
+	}
+
+	return &tls.Config{
+		RootCAs: pool,
+		Certificates: []tls.Certificate{cert},
+	}, nil
+}
+
+func fileOrAsset(path string, defaultPath string) ([]byte, error) {
+	loadFn := ioutil.ReadFile
+	if path == "" {
+		loadFn = assets.Asset
+		path = defaultPath
+	}
+	return loadFn(path)
 }

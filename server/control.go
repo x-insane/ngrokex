@@ -9,6 +9,7 @@ import (
 
 	"github.com/x-insane/ngrokex/conn"
 	"github.com/x-insane/ngrokex/msg"
+	"github.com/x-insane/ngrokex/server/db"
 	"github.com/x-insane/ngrokex/util"
 	"github.com/x-insane/ngrokex/version"
 )
@@ -24,6 +25,9 @@ const (
 type Control struct {
 	// auth message
 	auth *msg.Auth
+
+	// user message
+	user *db.User
 
 	// actual connection
 	conn conn.Conn
@@ -78,17 +82,25 @@ func NewControl(ctlConn conn.Conn, authMsg *msg.Auth) {
 		shutdown:        util.NewShutdown(),
 	}
 
-	failAuth := func(e error) {
-		_ = msg.WriteMsg(ctlConn, &msg.AuthResp{Error: e.Error()})
-		ctlConn.Close()
+	failAuth := func(errno int64, err error) {
+		_ = msg.WriteMsg(ctlConn, &msg.AuthResp{Errno: errno, Error: err.Error()})
+		_ = ctlConn.Close()
 	}
 
-	// register the clientid
+	// fetch user info
+	user, err := db.GetUserByToken(authMsg.User)
+	if err != nil {
+		failAuth(403, fmt.Errorf("wrong auth token"))
+		return
+	}
+	c.user = user
+
+	// register the client id
 	c.id = authMsg.ClientId
 	if c.id == "" {
 		// it's a new session, assign an ID
 		if c.id, err = util.SecureRandId(16); err != nil {
-			failAuth(err)
+			failAuth(500, err)
 			return
 		}
 	}
@@ -98,7 +110,7 @@ func NewControl(ctlConn conn.Conn, authMsg *msg.Auth) {
 	ctlConn.AddLogPrefix(c.id)
 
 	if authMsg.Version != version.Proto {
-		failAuth(fmt.Errorf("Incompatible versions. Server %s, client %s. Download a new version at http://ngrok.com", version.MajorMinor(), authMsg.Version))
+		failAuth(501, fmt.Errorf("incompatible versions. Server %s, client %s", version.MajorMinor(), authMsg.Version))
 		return
 	}
 
@@ -128,6 +140,37 @@ func NewControl(ctlConn conn.Conn, authMsg *msg.Auth) {
 
 // Register a new tunnel on this control connection
 func (c *Control) registerTunnel(rawTunnelReq *msg.ReqTunnel) {
+	// check login
+	if c.user == nil {
+		c.out <- &msg.NewTunnel{
+			ReqId: rawTunnelReq.ReqId,
+			Error: "no token registered before",
+			Errno: 404,
+		}
+		c.shutdown.Begin()
+		return
+	}
+
+	// check sub_domain permission
+	if rawTunnelReq.Subdomain != "" && !db.CanUserUseSubDomain(c.user.UserId, rawTunnelReq.Subdomain) {
+		c.out <- &msg.NewTunnel{
+			ReqId: rawTunnelReq.ReqId,
+			Error: fmt.Sprintf("permission denied to request sub domain %s", rawTunnelReq.Subdomain),
+			Errno: 403,
+		}
+		return
+	}
+
+	// check port permission
+	if rawTunnelReq.RemotePort != 0 && !db.CanUserUsePort(c.user.UserId, int64(rawTunnelReq.RemotePort)) {
+		c.out <- &msg.NewTunnel{
+			ReqId: rawTunnelReq.ReqId,
+			Error: fmt.Sprintf("permission denied to request port %d", rawTunnelReq.RemotePort),
+			Errno: 403,
+		}
+		return
+	}
+
 	for _, proto := range strings.Split(rawTunnelReq.Protocol, "+") {
 		tunnelReq := *rawTunnelReq
 		tunnelReq.Protocol = proto
@@ -135,7 +178,11 @@ func (c *Control) registerTunnel(rawTunnelReq *msg.ReqTunnel) {
 		c.conn.Debug("Registering new tunnel")
 		t, err := NewTunnel(&tunnelReq, c)
 		if err != nil {
-			c.out <- &msg.NewTunnel{Error: err.Error()}
+			c.out <- &msg.NewTunnel{
+				ReqId: rawTunnelReq.ReqId,
+				Error: err.Error(),
+				Errno: 500,
+			}
 			if len(c.tunnels) == 0 {
 				c.shutdown.Begin()
 			}
@@ -154,7 +201,7 @@ func (c *Control) registerTunnel(rawTunnelReq *msg.ReqTunnel) {
 			ReqId:    rawTunnelReq.ReqId,
 		}
 
-		rawTunnelReq.Hostname = strings.Replace(t.url, proto+"://", "", 1)
+		rawTunnelReq.Hostname = t.req.Hostname
 	}
 }
 
